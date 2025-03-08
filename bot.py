@@ -27,6 +27,9 @@ scheduled_messages = load_messages()
 
 # Function to send scheduled messages
 async def send_scheduled_message(channel_id, message):
+
+    print(f"📢 Attempting to send message: '{message}' to channel {channel_id}")
+
     channel = client.get_channel(channel_id)
     if channel:
         await channel.send(message)
@@ -39,7 +42,13 @@ async def on_ready():
         dt = datetime.strptime(timestamp, "%Y-%m-%d %H:%M")
         scheduler.add_job(send_scheduled_message, "date", run_date=dt, args=[1327304088513286268, message])
 
-    scheduler.start()
+    if not scheduler.running:
+        scheduler.start()
+    
+    print("📆 Scheduled Jobs:")
+    for job in scheduler.get_jobs():
+        print(f" - Job {job.id}: Runs at {job.next_run_time}")
+
 
 @client.event
 async def on_message(message):
@@ -64,7 +73,7 @@ async def on_message(message):
             json.dump(scheduled_messages, f, indent=4)
 
         dt = datetime.strptime(date_time, "%Y-%m-%d %H:%M")
-        scheduler.add_job(send_scheduled_message, "date", run_date=dt, args=[message.channel.id, msg])
+        scheduler.add_job(send_scheduled_message, "date", run_date=dt, args=[1327304088513286268, msg])
 
         await message.channel.send(f"✅ Scheduled message for {date_time}: {msg}")
 
