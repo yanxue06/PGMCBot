@@ -8,6 +8,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from datetime import datetime
+from flask import Flask
 
 dotenv.load_dotenv()
 
@@ -16,6 +17,12 @@ intents = discord.Intents.default()
 intents.message_content = True  # Enable reading message content
 client = discord.Client(intents=intents)
 scheduler = AsyncIOScheduler()
+
+app = Flask(__name__)
+
+@app.route('/')
+def index():
+    return "Discord Bot is running!"
 
 # Google Sheets setup
 def setup_sheets():
@@ -89,7 +96,7 @@ async def on_ready():
     # Run once on startup
     await check_sheets_updates()
 
-    scheduler.add_job(check_sheets_updates, "interval", minutes=5)
+    scheduler.add_job(check_sheets_updates, "interval", minutes=20)
 
     if not scheduler.running:
         scheduler.start()
@@ -150,5 +157,47 @@ async def add_scheduled_message(date, time, message, channel_id):
 
 
 
-# run the bot
-client.run(os.getenv('DISCORD_BOT_TOKEN'))
+if __name__ == "__main__":
+    import multiprocessing
+    import signal
+    import sys
+    
+    # Handle graceful shutdown
+    def signal_handler(sig, frame):
+        print("Shutting down the bot...")
+        sys.exit(0)
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    def run_flask():
+        try:
+            port = int(os.environ.get("PORT", 8080))
+            print(f"🌐 Starting Flask server on port {port}...")
+            app.run(host="0.0.0.0", port=port, debug=False)
+        except Exception as e:
+            print(f"❌ Flask server error: {e}")
+            sys.exit(1)
+
+    def run_discord():
+        try:
+            token = os.getenv("DISCORD_BOT_TOKEN")
+            if not token:
+                print("❌ DISCORD_BOT_TOKEN not found in environment variables")
+                sys.exit(1)
+            print("🤖 Starting Discord bot...")
+            client.run(token)
+        except Exception as e:
+            print(f"❌ Discord bot error: {e}")
+            sys.exit(1)
+
+    # Start both processes
+    flask_process = multiprocessing.Process(target=run_flask)
+    discord_process = multiprocessing.Process(target=run_discord)
+    
+    flask_process.start()
+    discord_process.start()
+    
+    # Wait for processes to complete
+    flask_process.join()
+    discord_process.join()
