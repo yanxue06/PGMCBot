@@ -59,6 +59,8 @@ async def check_sheets_updates():
                     print(f"📝 Found new message to schedule: {date} {time} - {message}")
                     await add_scheduled_message(date, time, message, channel)
                     sheet.update_cell(i+1, 5, "scheduled")
+            else:
+                print(f"📝 Message already sent: {date} {time} - {message}")
 
     except Exception as e:
         print(f"❌ Error checking Google Sheets: {e}")
@@ -87,7 +89,7 @@ async def on_ready():
     # Run once on startup
     await check_sheets_updates()
 
-    scheduler.add_job(check_sheets_updates, "interval", minutes=10)
+    scheduler.add_job(check_sheets_updates, "interval", minutes=5)
 
     if not scheduler.running:
         scheduler.start()
