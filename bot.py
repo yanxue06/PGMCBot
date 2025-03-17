@@ -5,16 +5,23 @@ import json
 import os
 import dotenv
 import gspread
+import pytz
 from google.oauth2.service_account import Credentials
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from datetime import datetime
 from flask import Flask
+
+# Define Vancouver timezone that automatically adjusts for DST
+vancouver_tz = pytz.timezone('America/Vancouver')
 
 dotenv.load_dotenv()
 
 # Initialize bot    
 intents = discord.Intents.default()
 intents.message_content = True  # Enable reading message content
+intents.guilds = True  # Enable server/guild related events
+intents.guild_messages = True  # Enable message events in servers
+intents.guild_scheduled_events = True  # Enable scheduled events
 client = discord.Client(intents=intents)
 scheduler = AsyncIOScheduler()
 
@@ -56,91 +63,132 @@ async def check_sheets_updates():
             channel = row[3] 
             status = row[4]
 
-            if status == "": 
-                if datetime.now() > datetime.strptime(f"{date} {time}", "%m-%d-%Y %H:%M"):
-                    print(f"📝 Found new message to send: {date} {time} - {message}")
-                    sheet.update_cell(i+1, 5, "sent") 
-                else: 
-                    # that was a new row that was added
-                    # need to add the message to the scheduled messages
-                    print(f"📝 Found new message to schedule: {date} {time} - {message}")
-                    await add_scheduled_message(date, time, message, channel)
-                    sheet.update_cell(i+1, 5, "scheduled")
-            else:
-                print(f"📝 Message already sent: {date} {time} - {message}")
+            try:
+                # Parse the time in Vancouver timezone with automatic DST handling
+                naive_dt = datetime.strptime(f"{date} {time}", "%m-%d-%Y %H:%M")
+                scheduled_time = vancouver_tz.localize(naive_dt)
+                current_time = datetime.now(vancouver_tz)
+                
+                print(f"⏰ Scheduled time: {scheduled_time}, Current time: {current_time}")
+                
+                if status == "": 
+                    if current_time > scheduled_time:
+                        print(f"📝 Message is overdue {date} {time} - {message}")
+                        # Try to send it anyway
+                        sheet.update_cell(i+1, 5, "overdue")
+                    else: 
+                        print(f"📝 Found new message to schedule: {date} {time} - {message}")
+                        await add_scheduled_message(date, time, message, channel)
+                        sheet.update_cell(i+1, 5, "scheduled")
+                elif status == "scheduled" and current_time > scheduled_time:
+                    print(f"📝 Scheduled message is due: {date} {time} - {message}")
+                    # Try to send the message
+                    await send_scheduled_message(channel, message)
+                    sheet.update_cell(i+1, 5, "overdue")
+            except Exception as e:
+                print(f"❌ Error processing row {i+1}: {e}")
 
     except Exception as e:
         print(f"❌ Error checking Google Sheets: {e}")
 
-# Load scheduled messages from JSON
-def load_messages():
-    try:
-        with open("schedule.json", "r") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {}
+# # Load scheduled messages from JSON
+# def load_messages():
+#     try:
+#         with open("schedule.json", "r") as f:
+#             return json.load(f)
+#     except FileNotFoundError:
+#         return {}
 
-scheduled_messages = load_messages()
+# scheduled_messages = load_messages()
 
 # Function to send scheduled messages
 async def send_scheduled_message(channel_id, message):
-
-    print(f"📢 Attempting to send message: '{message}' to channel {channel_id}")
-    channel = client.get_channel(channel_id)
-    if channel:
+    try:
+        print(f"📢 Attempting to send message: '{message}' to channel {channel_id}")
+        # Convert channel_id to integer if it's a string
+        channel_id = int(channel_id)
+        print(f"🔍 Looking for channel with ID: {channel_id}")
+        print(f"🌐 Bot is in {len(client.guilds)} servers")
+        
+        # Debug: List all available channels
+        for guild in client.guilds:
+            print(f"📋 Server: {guild.name}")
+            for channel in guild.channels:
+                print(f"  - Channel: {channel.name} (ID: {channel.id})")
+        
+        channel = client.get_channel(channel_id)
+        
+        if channel is None:
+            print(f"❌ Could not find channel with ID: {channel_id}")
+            return
+            
+        print(f"✅ Found channel: {channel.name}")
         await channel.send(message)
+        print(f"✅ Successfully sent message to channel {channel_id}")
+    except ValueError as e:
+        print(f"❌ Invalid channel ID format: {channel_id}. Error: {e}")
+    except Exception as e:
+        print(f"❌ Error sending message: {e}")
+        import traceback
+        print(f"Stack trace: {traceback.format_exc()}")
 
 @client.event
 async def on_ready():
+    print(f"🤖 Bot is connected as {client.user.name}")
+    print(f"🔗 Bot ID: {client.user.id}")
+    print(f"🌐 Connected to {len(client.guilds)} servers")
+    
     # here are the current scheduled messages
     # Run once on startup
     await check_sheets_updates()
 
-    scheduler.add_job(check_sheets_updates, "interval", minutes=20)
+    print("⏰ Setting up scheduler to check every minute...")
+    scheduler.add_job(check_sheets_updates, "interval", minutes=30)
 
     if not scheduler.running:
         scheduler.start()
+        print("⏰ Scheduler started successfully")
+        # Print all scheduled jobs
+        jobs = scheduler.get_jobs()
+        print(f"📅 Current scheduled jobs: {len(jobs)}")
+        for job in jobs:
+            print(f"  - Job ID: {job.id}, Next run: {job.next_run_time}")
 
+# # one option to quick add messages via discord commands 
+# @client.event
+# async def on_message(message):
 
-# one option to quick add messages via discord commands 
-@client.event
-async def on_message(message):
+#     content = message.content
 
-    content = message.content
-
-    print(f"message received: {content}")
-    if message.author == client.user:
-        return
+#     print(f"message received: {content}")
+#     if message.author == client.user:
+#         return
     
-    if content.startswith("!schedule"):
-        parts = content.split(" ", 3)
-        if len(parts) < 4:
-            await message.channel.send("Invalid Message. Usage: !schedule YYYY-MM-DD HH:MM Message")
-            return
+#     if content.startswith("!schedule"):
+#         parts = content.split(" ", 3)
+#         if len(parts) < 4:
+#             await message.channel.send("Invalid Message. Usage: !schedule YYYY-MM-DD HH:MM Message")
+#             return
         
-        date_time = parts[1] + " " + parts[2]
-        msg = parts[3]
-        scheduled_messages[date_time] = msg
+#         date_time = parts[1] + " " + parts[2]
+#         msg = parts[3]
+#         scheduled_messages[date_time] = msg
         
-        with open("schedule.json", "w") as f:
-            json.dump(scheduled_messages, f, indent=4)
+#         with open("schedule.json", "w") as f:
+#             json.dump(scheduled_messages, f, indent=4)
 
-        dt = datetime.strptime(date_time, "%Y-%m-%d %H:%M")
-        scheduler.add_job(send_scheduled_message, "date", run_date=dt, args=[1327304088513286268, msg])
+#         dt = datetime.strptime(date_time, "%Y-%m-%d %H:%M")
+#         scheduler.add_job(send_scheduled_message, "date", run_date=dt, args=[1327304088513286268, msg])
 
-        await message.channel.send(f"✅ Scheduled message for {date_time}: {msg}")
+#         await message.channel.send(f"✅ Scheduled message for {date_time}: {msg}")
 
 @client.event 
 async def add_scheduled_message(date, time, message, channel_id):
     try:
-        # Check if already scheduled
-        uid = (date, time, message, channel_id)
-        if uid in scheduled_messages:
-            print(f"⚠️ Message already scheduled: {date} - {time} - {message}")
-            return False
+        # Convert to datetime and schedule with proper timezone
+        naive_dt = datetime.strptime(f"{date} {time}", "%m-%d-%Y %H:%M")
+        dt = vancouver_tz.localize(naive_dt)
         
-        # Convert to datetime and schedule
-        dt = datetime.strptime(f"{date} {time}", "%m-%d-%Y %H:%M")
         scheduler.add_job(
             send_scheduled_message, 
             "date", 
@@ -169,6 +217,9 @@ if __name__ == "__main__":
     
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
+    
+    # Set the start method for multiprocessing
+    multiprocessing.set_start_method('fork')
     
     def run_flask():
         try:

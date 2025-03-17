@@ -4,3 +4,4 @@ gspread>=5.0.0
 google-auth>=2.3.0
 apscheduler>=3.9.0
 flask>=2.0.0
+pytz>=2023.3
