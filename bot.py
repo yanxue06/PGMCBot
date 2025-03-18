@@ -23,7 +23,9 @@ intents.guilds = True  # Enable server/guild related events
 intents.guild_messages = True  # Enable message events in servers
 intents.guild_scheduled_events = True  # Enable scheduled events
 client = discord.Client(intents=intents)
-scheduler = AsyncIOScheduler()
+
+# Initialize scheduler with Vancouver timezone
+scheduler = AsyncIOScheduler(timezone=vancouver_tz)
 
 app = Flask(__name__)
 
@@ -83,7 +85,6 @@ async def check_sheets_updates():
                 elif status == "scheduled" and current_time > scheduled_time:
                     print(f"📝 Scheduled message is due: {date} {time} - {message}")
                     # Try to send the message
-                    await send_scheduled_message(channel, message)
                     sheet.update_cell(i+1, 5, "overdue")
             except Exception as e:
                 print(f"❌ Error processing row {i+1}: {e}")
@@ -102,7 +103,7 @@ async def check_sheets_updates():
 # scheduled_messages = load_messages()
 
 # Function to send scheduled messages
-async def send_scheduled_message(channel_id, message):
+async def send_scheduled_message(channel_id, message, date=None, time=None):  # Add date and time parameters
     try:
         print(f"📢 Attempting to send message: '{message}' to channel {channel_id}")
         # Convert channel_id to integer if it's a string
@@ -124,7 +125,32 @@ async def send_scheduled_message(channel_id, message):
             
         print(f"✅ Found channel: {channel.name}")
         await channel.send(message)
-        print(f"✅ Successfully sent message to channel {channel_id}")
+        print(f"✅ WOAH Successfully sent message to channel {channel_id} at {date} {time}")
+
+        # Update the sheet status to "sent"
+        try:
+            sheet = setup_sheets()
+            if sheet:
+                data = sheet.get_all_values()
+                # Skip header row and search for the message
+                for i in range(1, len(data)):
+                    row = data[i]
+                    # Match all available criteria
+                    matches_criteria = (
+                        row[2] == message and  # Message content matches
+                        row[3] == str(channel_id) and  # Channel ID matches
+                        (date is None or row[0] == date) and  # Date matches if provided
+                        (time is None or row[1] == time) and  # Time matches if provided
+                        row[4] in ["scheduled", ""]  # Status is either empty or scheduled
+                    )
+                    
+                    if matches_criteria:
+                        print(f"📝 Found message in sheet at row {i+1}, updating status to sent")
+                        sheet.update_cell(i+1, 5, "sent")
+                        break
+        except Exception as e:
+            print(f"❌ Error updating sheet status: {e}")
+
     except ValueError as e:
         print(f"❌ Invalid channel ID format: {channel_id}. Error: {e}")
     except Exception as e:
@@ -142,7 +168,7 @@ async def on_ready():
     # Run once on startup
     await check_sheets_updates()
 
-    print("⏰ Setting up scheduler to check every minute...")
+    print("⏰ Setting up scheduler to check every 15 minutes...")
     scheduler.add_job(check_sheets_updates, "interval", minutes=30)
 
     if not scheduler.running:
@@ -193,7 +219,7 @@ async def add_scheduled_message(date, time, message, channel_id):
             send_scheduled_message, 
             "date", 
             run_date=dt, 
-            args=[channel_id, message],
+            args=[channel_id, message, date, time],  # Pass date and time to send_scheduled_message
             id=f"msg_{date}_{time}_{message[:10]}"
         )
         
