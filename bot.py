@@ -67,7 +67,7 @@ async def check_sheets_updates():
 
             try:
                 # Parse the time in Vancouver timezone with automatic DST handling
-                naive_dt = datetime.strptime(f"{date} {time}", "%m-%d-%Y %H:%M")
+                naive_dt = datetime.strptime(f"{date} {time}", "%m/%d/%Y %H:%M")
                 scheduled_time = vancouver_tz.localize(naive_dt)
                 current_time = datetime.now(vancouver_tz)
                 
@@ -76,16 +76,17 @@ async def check_sheets_updates():
                 if status == "": 
                     if current_time > scheduled_time:
                         print(f"📝 Message is overdue {date} {time} - {message}")
-                        # Try to send it anyway
+                        # Don't send overdue messages, just mark them
                         sheet.update_cell(i+1, 5, "overdue")
                     else: 
                         print(f"📝 Found new message to schedule: {date} {time} - {message}")
+                        # Schedule the message and let the scheduler handle it
                         await add_scheduled_message(date, time, message, channel)
                         sheet.update_cell(i+1, 5, "scheduled")
-                elif status == "scheduled" and current_time > scheduled_time:
-                    print(f"📝 Scheduled message is due: {date} {time} - {message}")
-                    # Try to send the message
-                    sheet.update_cell(i+1, 5, "overdue")
+                # Remove this part - let the scheduler handle scheduled messages
+                # elif status == "scheduled" and current_time > scheduled_time:
+                #     print(f"📝 Scheduled message is due: {date} {time} - {message}")
+                #     sheet.update_cell(i+1, 5, "overdue")
             except Exception as e:
                 print(f"❌ Error processing row {i+1}: {e}")
 
@@ -168,8 +169,8 @@ async def on_ready():
     # Run once on startup
     await check_sheets_updates()
 
-    print("⏰ Setting up scheduler to check every 15 minutes...")
-    scheduler.add_job(check_sheets_updates, "interval", minutes=30)
+    print("⏰ Setting up scheduler to check every 60 minutes...")
+    scheduler.add_job(check_sheets_updates, "interval", minutes=60)
 
     if not scheduler.running:
         scheduler.start()
@@ -212,14 +213,14 @@ async def on_ready():
 async def add_scheduled_message(date, time, message, channel_id):
     try:
         # Convert to datetime and schedule with proper timezone
-        naive_dt = datetime.strptime(f"{date} {time}", "%m-%d-%Y %H:%M")
+        naive_dt = datetime.strptime(f"{date} {time}", "%m/%d/%Y %H:%M")
         dt = vancouver_tz.localize(naive_dt)
         
         scheduler.add_job(
             send_scheduled_message, 
             "date", 
             run_date=dt, 
-            args=[channel_id, message, date, time],  # Pass date and time to send_scheduled_message
+            args=[channel_id, message, date, time],
             id=f"msg_{date}_{time}_{message[:10]}"
         )
         
