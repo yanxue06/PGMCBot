@@ -31,7 +31,9 @@ app = Flask(__name__)
 
 @app.route('/')
 def index():
-    return "Discord Bot is running!"
+    jobs = scheduler.get_jobs()
+    job_info = [{"id": job.id, "next_run": str(job.next_run_time)} for job in jobs]
+    return f"Discord Bot is running! Scheduled jobs: {len(jobs)}\nJobs: {job_info}"
 
 # Google Sheets setup
 def setup_sheets():
@@ -54,6 +56,10 @@ async def check_sheets_updates():
             return
             
         data = sheet.get_all_values()
+        current_jobs = scheduler.get_jobs()
+        print(f"📅 Current scheduled jobs before update: {len(current_jobs)}")
+        for job in current_jobs:
+            print(f"  - Job ID: {job.id}, Next run: {job.next_run_time}")
         
         # Skip header row
         for i in range(1, len(data)):
@@ -71,27 +77,48 @@ async def check_sheets_updates():
                 scheduled_time = vancouver_tz.localize(naive_dt)
                 current_time = datetime.now(vancouver_tz)
                 
-                print(f"⏰ Scheduled time: {scheduled_time}, Current time: {current_time}")
+                print(f"⏰ Processing row {i+1}: Scheduled time: {scheduled_time}, Current time: {current_time}, Status: {status}")
                 
-                if status == "": 
+                # Generate job ID
+                job_id = f"msg_{date}_{time}_{message[:10]}"
+                
+                if status == "scheduled":
+                    # Check if job exists
+                    job = scheduler.get_job(job_id)
+                    if job is None:
+                        print(f"🔄 Rescheduling missing job for {date} {time}: {message}")
+                        if current_time > scheduled_time:
+                            print(f"⏰ Message is now overdue, marking as overdue")
+                            sheet.update_cell(i+1, 5, "overdue")
+                        else:
+                            await add_scheduled_message(date, time, message, channel)
+                    else:
+                        print(f"✅ Job {job_id} already scheduled")
+                
+                elif status == "": 
                     if current_time > scheduled_time:
                         print(f"📝 Message is overdue {date} {time} - {message}")
-                        # Don't send overdue messages, just mark them
                         sheet.update_cell(i+1, 5, "overdue")
                     else: 
                         print(f"📝 Found new message to schedule: {date} {time} - {message}")
-                        # Schedule the message and let the scheduler handle it
                         await add_scheduled_message(date, time, message, channel)
                         sheet.update_cell(i+1, 5, "scheduled")
-                # Remove this part - let the scheduler handle scheduled messages
-                # elif status == "scheduled" and current_time > scheduled_time:
-                #     print(f"📝 Scheduled message is due: {date} {time} - {message}")
-                #     sheet.update_cell(i+1, 5, "overdue")
+                
             except Exception as e:
                 print(f"❌ Error processing row {i+1}: {e}")
+                import traceback
+                print(f"Stack trace: {traceback.format_exc()}")
+
+        # Print final scheduler state
+        current_jobs = scheduler.get_jobs()
+        print(f"📅 Current scheduled jobs after update: {len(current_jobs)}")
+        for job in current_jobs:
+            print(f"  - Job ID: {job.id}, Next run: {job.next_run_time}")
 
     except Exception as e:
         print(f"❌ Error checking Google Sheets: {e}")
+        import traceback
+        print(f"Stack trace: {traceback.format_exc()}")
 
 # # Load scheduled messages from JSON
 # def load_messages():
@@ -165,21 +192,30 @@ async def on_ready():
     print(f"🔗 Bot ID: {client.user.id}")
     print(f"🌐 Connected to {len(client.guilds)} servers")
     
-    # here are the current scheduled messages
-    # Run once on startup
+    # Print all available channels
+    print("📋 Available channels:")
+    for guild in client.guilds:
+        print(f"  Server: {guild.name}")
+        for channel in guild.channels:
+            print(f"    - Channel: {channel.name} (ID: {channel.id})")
+    
+    # Run initial check
+    print("🔄 Running initial sheet check...")
     await check_sheets_updates()
 
-    print("⏰ Setting up scheduler to check every 60 minutes...")
-    scheduler.add_job(check_sheets_updates, "interval", minutes=60)
-
+    print("⏰ Setting up schedulers...")
+    # Check sheets every 5 minutes
+    scheduler.add_job(check_sheets_updates, "interval", minutes=5, id="sheet_checker")
+    
     if not scheduler.running:
         scheduler.start()
         print("⏰ Scheduler started successfully")
-        # Print all scheduled jobs
-        jobs = scheduler.get_jobs()
-        print(f"📅 Current scheduled jobs: {len(jobs)}")
-        for job in jobs:
-            print(f"  - Job ID: {job.id}, Next run: {job.next_run_time}")
+    
+    # Print all scheduled jobs
+    jobs = scheduler.get_jobs()
+    print(f"📅 Current scheduled jobs: {len(jobs)}")
+    for job in jobs:
+        print(f"  - Job ID: {job.id}, Next run: {job.next_run_time}")
 
 # # one option to quick add messages via discord commands 
 # @client.event
@@ -216,18 +252,29 @@ async def add_scheduled_message(date, time, message, channel_id):
         naive_dt = datetime.strptime(f"{date} {time}", "%m/%d/%Y %H:%M")
         dt = vancouver_tz.localize(naive_dt)
         
+        job_id = f"msg_{date}_{time}_{message[:10]}"
+        
+        # Check if job already exists
+        existing_job = scheduler.get_job(job_id)
+        if existing_job:
+            print(f"⚠️ Job {job_id} already exists, skipping")
+            return True
+        
         scheduler.add_job(
             send_scheduled_message, 
             "date", 
             run_date=dt, 
             args=[channel_id, message, date, time],
-            id=f"msg_{date}_{time}_{message[:10]}"
+            id=job_id
         )
         
         print(f"✅ Added new scheduled message for {dt}: {message}")
+        print(f"📅 Job details - ID: {job_id}, Run date: {dt}")
         return True
     except Exception as e:
         print(f"❌ Error adding scheduled message: {e}")
+        import traceback
+        print(f"Stack trace: {traceback.format_exc()}")
         return False
 
 
